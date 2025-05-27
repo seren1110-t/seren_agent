@@ -52,7 +52,7 @@ jobs:
 
     - name: Run data collection agent
       run: |
-        python data_collector.py
+        python data_ct_agent.py
       env:
         DISPLAY: :99
 
