@@ -28,7 +28,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.9'
+        python-version: '3.11'
         cache: 'pip'
 
     - name: Install system dependencies
@@ -50,10 +50,6 @@ jobs:
         echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> $GITHUB_ENV
         echo "PYTHONPATH=$GITHUB_WORKSPACE" >> $GITHUB_ENV
 
-    - name: Create necessary directories
-      run: |
-        mkdir -p data
-        mkdir -p logs
 
     - name: Run data collection agent
       run: |
@@ -68,7 +64,7 @@ jobs:
         git config user.name "github-actions"
         git config user.email "github-actions@github.com"
 
-        git add financial_data.db bk_faiss_index/ bk_docs.pkl logs/
+        git add financial_data.db bk_faiss_index/ bk_docs.pkl
         git commit -m "Auto-update collected data from GitHub Actions on $(date +'%Y-%m-%d %H:%M')" || echo "No changes to commit"
 
         git pull --rebase "$REPO_URL" main
