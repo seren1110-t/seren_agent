@@ -4,12 +4,17 @@ on:
   schedule:
     - cron: '0 0 * * *'  # 매일 오전 9시 (UTC)
   workflow_dispatch:  # 수동 실행
+
+  
   push:
     branches: [ main ]
     paths:
       - 'data_ct_agent.py'
       - 'news_collector.py' 
       - 'financial_collector.py'
+
+permissions:
+  contents: write
 
 jobs:
   collect-data:
