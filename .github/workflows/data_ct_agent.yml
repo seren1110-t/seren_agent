@@ -1,0 +1,14 @@
+name: Smart Data Collection
+
+on:
+  workflow_dispatch:  # 수동 실행 가능
+  schedule:
+    - cron: '0 9 * * *'  # 매일 오전 9시
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run Data Collection Agent
+        run: python data_collection_agent.py
