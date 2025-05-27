@@ -9,3 +9,6 @@ langchain-community==0.3.24
 transformers
 langgraph
 langchain-openai
+beautifulsoup4
+pykrx
+aiohttp
