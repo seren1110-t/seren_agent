@@ -7,3 +7,4 @@ faiss-cpu
 python-dotenv
 langchain-community==0.3.24
 transformers
+langgraph
