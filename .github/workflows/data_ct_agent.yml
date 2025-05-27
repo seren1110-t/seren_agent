@@ -2,9 +2,8 @@ name: Data Collection Agent
 
 on:
   schedule:
-    # 매일 오전 9시 (UTC 기준 00:00)에 실행
-    - cron: '0 0 * * *'
-  workflow_dispatch:  # 수동 실행 가능
+    - cron: '0 0 * * *'  # 매일 오전 9시 (UTC)
+  workflow_dispatch:  # 수동 실행
   push:
     branches: [ main ]
     paths:
@@ -16,93 +15,56 @@ jobs:
   collect-data:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.9'
         cache: 'pip'
-        
+
     - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y wget unzip
-        # Chrome 브라우저 설치 (Selenium용)
         wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
         sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list'
         sudo apt-get update
         sudo apt-get install -y google-chrome-stable
-        
+
     - name: Install Python dependencies
       run: |
         pip install --upgrade pip
         pip install -r requirements.txt
-        
-    - name: Set up environment variables
+
+    - name: Set environment variables
       run: |
         echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> $GITHUB_ENV
         echo "PYTHONPATH=$GITHUB_WORKSPACE" >> $GITHUB_ENV
-        
+
     - name: Create necessary directories
       run: |
         mkdir -p data
         mkdir -p logs
-        
-    - name: Download existing data (if available)
-      continue-on-error: true
-      run: |
-        # GitHub Artifacts나 외부 스토리지에서 기존 데이터 다운로드
-        # 예: AWS S3, Google Drive 등
-        echo "Checking for existing data files..."
-        
+
     - name: Run data collection agent
       run: |
         python data_collector.py
       env:
         DISPLAY: :99
-        
-    - name: Upload collected data
-      uses: actions/upload-artifact@v3
-      if: always()
-      with:
-        name: collected-data-${{ github.run_number }}
-        path: |
-          financial_data.db
-          bk_faiss_index/
-          bk_docs.pkl
-          logs/
-        retention-days: 30
-        
-    - name: Upload to external storage (optional)
-      continue-on-error: true
+
+    - name: Commit and push collected data
+      env:
+        REPO_URL: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
       run: |
-        # 외부 스토리지에 업로드하는 스크립트
-        # 예: AWS S3, Google Drive 등
-        echo "Uploading to external storage..."
-        
-    - name: Create execution summary
-      if: always()
-      run: |
-        echo "## Data Collection Summary" >> $GITHUB_STEP_SUMMARY
-        echo "- Execution Time: $(date)" >> $GITHUB_STEP_SUMMARY
-        echo "- Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
-        if [ -f "financial_data.db" ]; then
-          echo "- Financial DB: ✅ Created" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "- Financial DB: ❌ Failed" >> $GITHUB_STEP_SUMMARY
-        fi
-        if [ -d "bk_faiss_index" ]; then
-          echo "- Vector DB: ✅ Created" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "- Vector DB: ❌ Failed" >> $GITHUB_STEP_SUMMARY
-        fi
-        
-    - name: Send notification (optional)
-      if: failure()
-      run: |
-        # 실패 시 알림 발송 (Slack, Discord, Email 등)
-        echo "Data collection failed. Sending notification..."
+        git config user.name "github-actions"
+        git config user.email "github-actions@github.com"
+
+        git add financial_data.db bk_faiss_index/ bk_docs.pkl logs/
+        git commit -m "Auto-update collected data from GitHub Actions on $(date +'%Y-%m-%d %H:%M')" || echo "No changes to commit"
+
+        git pull --rebase "$REPO_URL" main
+        git push "$REPO_URL" main
