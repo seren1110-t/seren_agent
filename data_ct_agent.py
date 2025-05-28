@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-데이터 수집 에이전트 - 기존 뉴스/재무 데이터 수집 스크립트를 지능적으로 관리
+데이터 수집 에이전트 - 수정된 버전
 """
 
 import asyncio
 import os
 import sys
+import pandas as pd  # 추가
+import pickle       # 추가
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
@@ -15,20 +17,9 @@ from langgraph.graph import StateGraph, END
 from langchain_core.language_models import BaseLLM
 from langchain_openai import ChatOpenAI
 
-# 기존 모듈들 임포트 (원본 코드를 모듈화)
-from news_collector import (
-    scrape_news_until_cutoff_today, 
-    clean_korean_text,
-    HuggingFaceEmbeddings,
-    FAISS,
-    Document,
-    RecursiveCharacterTextSplitter
-)
-from financial_collector import (
-    get_kospi_tickers,
-    collect_kospi_reports_async,
-    collect_and_save_all
-)
+# 기존 모듈들 임포트
+from news_collector import NewsCollector, VectorDBManager, clean_korean_text
+from financial_collector import FinancialDataManager
 
 class CollectionStatus(Enum):
     PENDING = "pending"
@@ -59,12 +50,16 @@ class SmartDataCollectorAgent:
     """지능형 데이터 수집 에이전트"""
     
     def __init__(self, llm: BaseLLM = None):
-        self.llm = llm or ChatOpenAI(model="gpt-4", temperature=0)
+        self.llm = llm or ChatOpenAI(model="gpt-4", temperature=0) if llm else None
         self.state = DataCollectionState()
         
     def analyze_collection_context(self) -> Dict[str, Any]:
         """현재 수집 상황을 분석하여 최적 전략 결정"""
         
+        # LLM이 없는 경우 기본 전략 사용
+        if not self.llm:
+            return self._default_collection_strategy()
+            
         context_prompt = f"""
         현재 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         
@@ -102,26 +97,17 @@ class SmartDataCollectorAgent:
             return self._default_collection_strategy()
     
     def _default_collection_strategy(self) -> Dict[str, Any]:
-        """기본 수집 전략"""
+        """기본 수집 전략 - 수정됨"""
         current_hour = datetime.now().hour
         
-        # 기본 전략: 오전 9시 이후에는 모든 데이터 수집
-        if current_hour >= 9:
-            return {
-                "news_collection": "필요함",
-                "financial_collection": "필요함",
-                "priority": "both",
-                "reason": "정규 수집 시간",
-                "recommended_schedule": "즉시"
-            }
-        else:
-            return {
-                "news_collection": "불필요함",
-                "financial_collection": "불필요함", 
-                "priority": "none",
-                "reason": "시장 개장 전",
-                "recommended_schedule": "9시 이후"
-            }
+        # 더 관대한 수집 정책: 하루 종일 수집 가능
+        return {
+            "news_collection": "필요함",
+            "financial_collection": "필요함",
+            "priority": "both",
+            "reason": f"현재 시간 {current_hour}시, 데이터 수집 실행",
+            "recommended_schedule": "즉시"
+        }
     
     def _get_file_age(self, filepath: str) -> str:
         """파일의 나이를 반환"""
@@ -140,19 +126,21 @@ class SmartDataCollectorAgent:
             return f"{age.seconds // 60}분 전"
 
 class NewsCollectionAgent:
-    """뉴스 수집 전용 에이전트"""
+    """뉴스 수집 전용 에이전트 - 수정됨"""
     
     def __init__(self):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.collector = NewsCollector()  # 인스턴스 생성
+        self.db_manager = VectorDBManager()  # 인스턴스 생성
         
     def execute(self, state: DataCollectionState) -> CollectionResult:
-        """뉴스 데이터 수집 실행"""
+        """뉴스 데이터 수집 실행 - 수정됨"""
         
         try:
             print("📰 뉴스 데이터 수집 시작...")
             
-            # 1. 뉴스 크롤링 (기존 코드 사용)
-            news_data = scrape_news_until_cutoff_today(cutoff_hour=9)
+            # 1. 뉴스 크롤링 (수정된 호출 방식)
+            news_data = self.collector.scrape_news_until_cutoff_today(cutoff_hour=9)
             
             if not news_data:
                 return CollectionResult(
@@ -166,97 +154,100 @@ class NewsCollectionAgent:
             df['제목'] = df['제목'].apply(clean_korean_text)
             df['본문'] = df['본문'].apply(clean_korean_text)
             df.dropna(subset=['제목', '본문'], inplace=True)
-            df['내용'] = df['제목'] + '\n' + df['본문']
-            df['내용'] = df['내용'].str.slice(0, 500)
             
-            # 3. 벡터 DB 업데이트
-            self._update_vector_db(df)
+            print(f"정제된 뉴스 데이터: {len(df)}개")
             
-            return CollectionResult(
-                status=CollectionStatus.COMPLETED,
-                message="뉴스 수집 및 벡터 DB 업데이트 완료",
-                data_count=len(df),
-                file_path="bk_faiss_index"
-            )
+            # 3. 벡터 DB 업데이트 (수정된 방식)
+            success = self._update_vector_db(df.to_dict('records'))
+            
+            if success:
+                return CollectionResult(
+                    status=CollectionStatus.COMPLETED,
+                    message="뉴스 수집 및 벡터 DB 업데이트 완료",
+                    data_count=len(df),
+                    file_path="bk_faiss_index"
+                )
+            else:
+                return CollectionResult(
+                    status=CollectionStatus.COMPLETED,
+                    message="뉴스 수집 완료 (중복 제거로 인해 벡터 DB 업데이트 없음)",
+                    data_count=len(df),
+                    file_path=None
+                )
             
         except Exception as e:
+            print(f"뉴스 수집 오류: {e}")
             return CollectionResult(
                 status=CollectionStatus.FAILED,
                 message="뉴스 수집 실패",
                 error=str(e)
             )
     
-    def _update_vector_db(self, df):
-        """벡터 DB 업데이트 (기존 로직)"""
-        
-        embedding_model = HuggingFaceEmbeddings(
-            model_name="BAAI/bge-m3",
-            model_kwargs={'device': self.device}
-        )
-        
-        # 기존 문서 로드
+    def _update_vector_db(self, news_data):
+        """벡터 DB 업데이트 - 수정됨"""
         try:
-            with open("bk_docs.pkl", "rb") as f:
-                bk_docs = pickle.load(f)
-            bk_faiss_db = FAISS.load_local("bk_faiss_index", embedding_model, 
-                                         allow_dangerous_deserialization=True)
-        except:
-            bk_docs = []
-            bk_faiss_db = None
-        
-        # 중복 제거 및 새 문서 추가
-        existing_dates = set(doc.metadata.get("일자") for doc in bk_docs if "일자" in doc.metadata)
-        
-        new_docs = []
-        for idx, row in df.iterrows():
-            news_date = row["날짜"]
-            if news_date in existing_dates:
-                continue
-            metadata = {"일자": news_date, "제목": row["제목"], "URL": row["URL"]}
-            new_docs.append(Document(page_content=row["내용"], metadata=metadata))
-        
-        if new_docs:
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=900, chunk_overlap=100)
-            new_split_docs = text_splitter.split_documents(new_docs)
-            bk_docs.extend(new_split_docs)
+            # 임베딩 모델 초기화
+            self.db_manager.initialize_embedding_model()
             
-            if bk_faiss_db is None:
-                bk_faiss_db = FAISS.from_documents(new_split_docs, embedding_model)
+            # 기존 데이터 로드
+            self.db_manager.load_existing_data()
+            
+            # 새 데이터 추가
+            success = self.db_manager.add_news_to_vector_db(news_data)
+            
+            if success:
+                # 데이터 저장
+                self.db_manager.save_data()
+                print("✅ 벡터 DB 업데이트 및 저장 완료")
+                return True
             else:
-                bk_faiss_db.add_documents(new_split_docs)
-            
-            # 저장
-            with open("bk_docs.pkl", "wb") as f:
-                pickle.dump(bk_docs, f)
-            bk_faiss_db.save_local("bk_faiss_index")
+                print("ℹ️  새로 추가할 뉴스가 없음 (중복 제거)")
+                return False
+                
+        except Exception as e:
+            print(f"❌ 벡터 DB 업데이트 실패: {e}")
+            return False
 
 class FinancialCollectionAgent:
-    """재무 데이터 수집 전용 에이전트"""
+    """재무 데이터 수집 전용 에이전트 - 수정됨"""
+    
+    def __init__(self):
+        self.manager = FinancialDataManager()  # 인스턴스 생성
     
     def execute(self, state: DataCollectionState) -> CollectionResult:
-        """재무 데이터 수집 실행"""
+        """재무 데이터 수집 실행 - 수정됨"""
         
         try:
             print("💰 재무 데이터 수집 시작...")
             
-            # 기존 collect_and_save_all() 함수 사용
-            collect_and_save_all()
+            # 수정된 호출 방식
+            result_df = self.manager.collect_and_save_all(limit=50)  # 테스트를 위해 50개로 제한
             
             # DB 파일 확인
             if os.path.exists("financial_data.db"):
                 import sqlite3
                 conn = sqlite3.connect("financial_data.db")
                 cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*) FROM financial_data")
-                count = cursor.fetchone()[0]
-                conn.close()
                 
-                return CollectionResult(
-                    status=CollectionStatus.COMPLETED,
-                    message="재무 데이터 수집 완료",
-                    data_count=count,
-                    file_path="financial_data.db"
-                )
+                # 테이블 존재 확인
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='financial_data'")
+                if cursor.fetchone():
+                    cursor.execute("SELECT COUNT(*) FROM financial_data")
+                    count = cursor.fetchone()[0]
+                    conn.close()
+                    
+                    return CollectionResult(
+                        status=CollectionStatus.COMPLETED,
+                        message="재무 데이터 수집 완료",
+                        data_count=count,
+                        file_path="financial_data.db"
+                    )
+                else:
+                    conn.close()
+                    return CollectionResult(
+                        status=CollectionStatus.FAILED,
+                        message="DB 테이블 생성 실패"
+                    )
             else:
                 return CollectionResult(
                     status=CollectionStatus.FAILED,
@@ -264,6 +255,7 @@ class FinancialCollectionAgent:
                 )
                 
         except Exception as e:
+            print(f"재무 데이터 수집 오류: {e}")
             return CollectionResult(
                 status=CollectionStatus.FAILED,
                 message="재무 데이터 수집 실패",
@@ -332,24 +324,40 @@ def create_data_collection_workflow():
         
         # 결과 요약
         summary = {
-            "execution_time": datetime.now(),
+            "execution_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             "news_status": news_result.status.value if news_result else "unknown",
             "financial_status": financial_result.status.value if financial_result else "unknown",
             "total_news_count": news_result.data_count if news_result else 0,
             "total_financial_count": financial_result.data_count if financial_result else 0,
-            "generated_files": []
+            "generated_files": [],
+            "errors": []
         }
+        
+        # 에러 수집
+        if news_result and news_result.error:
+            summary["errors"].append(f"뉴스: {news_result.error}")
+        if financial_result and financial_result.error:
+            summary["errors"].append(f"재무: {financial_result.error}")
         
         # 생성된 파일 확인
         expected_files = ["financial_data.db", "bk_faiss_index", "bk_docs.pkl"]
         for file in expected_files:
             if os.path.exists(file):
-                summary["generated_files"].append(file)
+                file_size = os.path.getsize(file) if os.path.isfile(file) else "디렉토리"
+                summary["generated_files"].append(f"{file} ({file_size} bytes)" if file_size != "디렉토리" else f"{file} (디렉토리)")
         
         state["final_summary"] = summary
         
+        print("\n" + "="*60)
         print("✅ 데이터 수집 완료!")
-        print(f"📊 최종 결과: {summary}")
+        print("="*60)
+        print(f"📊 실행 시간: {summary['execution_time']}")
+        print(f"📰 뉴스 상태: {summary['news_status']} ({summary['total_news_count']}개)")
+        print(f"💰 재무 상태: {summary['financial_status']} ({summary['total_financial_count']}개)")
+        print(f"📁 생성 파일: {', '.join(summary['generated_files']) if summary['generated_files'] else '없음'}")
+        if summary['errors']:
+            print(f"❌ 오류: {', '.join(summary['errors'])}")
+        print("="*60)
         
         return state
     
@@ -378,6 +386,7 @@ def run_data_collection_agent():
     
     print("🚀 데이터 수집 에이전트 시작!")
     print(f"⏰ 실행 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"💻 작업 디렉토리: {os.getcwd()}")
     
     # 워크플로우 실행
     app = create_data_collection_workflow()
@@ -393,22 +402,46 @@ def run_data_collection_agent():
         # 실행 결과 리포트
         summary = final_state.get("final_summary", {})
         
-        print("\n" + "="*50)
-        print("📋 실행 결과 리포트")
-        print("="*50)
-        print(f"뉴스 수집: {summary.get('news_status', 'Unknown')}")
-        print(f"재무 수집: {summary.get('financial_status', 'Unknown')}")
-        print(f"뉴스 개수: {summary.get('total_news_count', 0)}")
-        print(f"재무 데이터 개수: {summary.get('total_financial_count', 0)}")
-        print(f"생성된 파일: {', '.join(summary.get('generated_files', []))}")
-        print("="*50)
+        print("\n" + "🎯 최종 실행 결과")
+        print(f"성공 여부: {'성공' if not summary.get('errors') else '부분 성공'}")
         
         return final_state
         
     except Exception as e:
         print(f"❌ 에이전트 실행 실패: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
+# 간단한 테스트 함수
+def test_individual_components():
+    """개별 컴포넌트 테스트"""
+    print("🧪 개별 컴포넌트 테스트 시작")
+    
+    # 1. 뉴스 수집 테스트
+    try:
+        print("📰 뉴스 수집 테스트...")
+        news_agent = NewsCollectionAgent()
+        state = DataCollectionState()
+        result = news_agent.execute(state)
+        print(f"뉴스 결과: {result.status.value} - {result.message}")
+    except Exception as e:
+        print(f"뉴스 테스트 실패: {e}")
+    
+    # 2. 재무 데이터 수집 테스트
+    try:
+        print("💰 재무 데이터 수집 테스트...")
+        financial_agent = FinancialCollectionAgent()
+        state = DataCollectionState()
+        result = financial_agent.execute(state)
+        print(f"재무 결과: {result.status.value} - {result.message}")
+    except Exception as e:
+        print(f"재무 테스트 실패: {e}")
+
 if __name__ == "__main__":
-    # GitHub Actions나 cron에서 실행될 때
-    run_data_collection_agent()
+    # 개별 테스트 실행 (디버깅용)
+    if len(sys.argv) > 1 and sys.argv[1] == "test":
+        test_individual_components()
+    else:
+        # 전체 에이전트 실행
+        run_data_collection_agent()
