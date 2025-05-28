@@ -221,7 +221,7 @@ class FinancialCollectionAgent:
             print("💰 재무 데이터 수집 시작...")
             
             # 수정된 호출 방식
-            result_df = self.manager.collect_and_save_all(limit=50)  # 테스트를 위해 50개로 제한
+            result_df = self.manager.collect_and_save_all(limit=None)  # 테스트를 위해 50개로 제한
             
             # DB 파일 확인
             if os.path.exists("financial_data.db"):
