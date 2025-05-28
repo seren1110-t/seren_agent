@@ -6,12 +6,12 @@ on:
   workflow_dispatch:  # 수동 실행
 
   
-  push:
-    branches: [ main ]
-    paths:
-      - 'data_ct_agent.py'
-      - 'news_collector.py' 
-      - 'financial_collector.py'
+#  push:
+#    branches: [ main ]
+#    paths:
+#      - 'data_ct_agent.py'
+#      - 'news_collector.py' 
+#      - 'financial_collector.py'
 
 permissions:
   contents: write
