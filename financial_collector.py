@@ -325,7 +325,7 @@ def get_financial_summary(db_path=DEFAULT_DB_PATH):
 if __name__ == "__main__":
     # 테스트 실행 (50개 종목으로 제한)
     print("테스트 실행: 50개 종목 데이터 수집")
-    quick_collect(limit=50)
+    quick_collect(limit=None)
     
     # 요약 정보 출력
     summary = get_financial_summary()
