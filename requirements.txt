@@ -13,3 +13,4 @@ beautifulsoup4
 pykrx
 aiohttp
 sentence-transformers
+gdown>=4.7.1
