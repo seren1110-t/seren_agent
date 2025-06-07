@@ -20,8 +20,8 @@ def download_and_load_models():
     """Google Drive에서 모델 다운로드 및 로드"""
     
     # Google Drive 파일 ID (공유 링크에서 추출)
-    base_model_id = "YOUR_BASE_MODEL_FILE_ID"  # my_base_model.tar.gz의 파일 ID
-    qlora_adapter_id = "YOUR_QLORA_ADAPTER_FILE_ID"  # qlora_results.zip의 파일 ID
+    base_model_id = "1CGpO7EO64hkUTU_eQQuZXbh-R84inkIc"  # my_base_model.tar.gz의 파일 ID
+    qlora_adapter_id = "1l2F6a5HpmEmdOwTKOpu5UNRQG_jrXeW0"  # qlora_results.zip의 파일 ID
     
     progress_bar = st.progress(0)
     status_text = st.empty()
