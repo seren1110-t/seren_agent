@@ -11,6 +11,7 @@ import tarfile
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 import torch
+import numpy as np
 
 st.set_page_config(page_title="📈 KOSPI Analyst AI", layout="wide")
 
@@ -20,8 +21,8 @@ def download_and_load_models():
     """Google Drive에서 모델 다운로드 및 로드"""
     
     # Google Drive 파일 ID (공유 링크에서 추출)
-    base_model_id = "1CGpO7EO64hkUTU_eQQuZXbh-R84inkIc"  # my_base_model.tar.gz의 파일 ID
-    qlora_adapter_id = "1l2F6a5HpmEmdOwTKOpu5UNRQG_jrXeW0"  # qlora_results.zip의 파일 ID
+    base_model_id = "YOUR_BASE_MODEL_FILE_ID"  # my_base_model.tar.gz의 파일 ID
+    qlora_adapter_id = "YOUR_QLORA_ADAPTER_FILE_ID"  # qlora_results.zip의 파일 ID
     
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -91,6 +92,14 @@ def load_data(db_name="financial_data.db", table_name="financial_data"):
         conn = sqlite3.connect(db_name)
         df = pd.read_sql(f"SELECT * FROM {table_name}", conn)
         conn.close()
+        
+        # 숫자 컬럼들을 numeric으로 변환하고 NaN 처리
+        numeric_columns = ['PER_최근', 'PBR_최근', 'ROE_최근', '부채비율_최근', '현재가']
+        for col in numeric_columns:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+                df[col] = df[col].fillna(0)  # NaN을 0으로 대체
+        
         return df
     except Exception as e:
         st.error(f"데이터 로드 실패: {e}")
@@ -150,10 +159,29 @@ def get_initial(korean_char):
         return ['ㄱ','ㄲ','ㄴ','ㄷ','ㄸ','ㄹ','ㅁ','ㅂ','ㅃ','ㅅ','ㅆ','ㅇ','ㅈ','ㅉ','ㅊ','ㅋ','ㅌ','ㅍ','ㅎ'][cho]
     return ""
 
+def safe_between_filter(series, min_val, max_val):
+    """안전한 between 필터링 (NaN 값 처리)"""
+    try:
+        # NaN이 아닌 값들만 필터링
+        mask = series.notna() & (series >= min_val) & (series <= max_val)
+        return mask
+    except:
+        # 오류 발생 시 모든 값을 True로 반환
+        return pd.Series([True] * len(series), index=series.index)
+
 # 메인 앱
 def main():
-    # URL 파라미터 읽기
-    url_params = st.experimental_get_query_params()
+    # 새로운 query_params 사용 (검색 결과 기반)
+    try:
+        # URL 파라미터 읽기 - 새로운 방식
+        default_initial = st.query_params.get("initial", "전체")
+        default_search = st.query_params.get("search", "")
+        default_company = st.query_params.get("company", "")
+    except:
+        # 파라미터가 없는 경우 기본값 사용
+        default_initial = "전체"
+        default_search = ""
+        default_company = ""
     
     # AI 모델 로드
     if 'model_loaded' not in st.session_state:
@@ -177,11 +205,6 @@ def main():
     # 사이드바 필터
     st.sidebar.header("📂 필터 옵션")
     
-    # URL 파라미터에서 기본값 가져오기
-    default_initial = url_params.get("initial", ["전체"])[0]
-    default_search = url_params.get("search", [""])[0]
-    default_company = url_params.get("company", [""])[0]
-    
     # 초성 필터
     initials = ['전체', 'ㄱ', 'ㄴ', 'ㄷ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅅ', 'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ']
     selected_initial = st.sidebar.selectbox("🔡 종목명 초성:", initials, 
@@ -192,17 +215,27 @@ def main():
     
     # 고급 검색 옵션
     with st.sidebar.expander("🔧 고급 검색 옵션"):
+        # 안전한 범위 계산
+        try:
+            per_min = float(df["PER_최근"].min()) if df["PER_최근"].notna().any() else 0.0
+            per_max = float(df["PER_최근"].max()) if df["PER_최근"].notna().any() else 50.0
+            pbr_min = float(df["PBR_최근"].min()) if df["PBR_최근"].notna().any() else 0.0
+            pbr_max = float(df["PBR_최근"].max()) if df["PBR_최근"].notna().any() else 10.0
+            price_min = int(df["현재가"].min()) if df["현재가"].notna().any() else 1000
+            price_max = int(df["현재가"].max()) if df["현재가"].notna().any() else 100000
+        except:
+            per_min, per_max = 0.0, 50.0
+            pbr_min, pbr_max = 0.0, 10.0
+            price_min, price_max = 1000, 100000
+        
         # PER 범위 필터
-        per_range = st.slider("PER 범위", 0.0, 50.0, (0.0, 50.0))
+        per_range = st.slider("PER 범위", per_min, per_max, (per_min, per_max))
         
         # PBR 범위 필터
-        pbr_range = st.slider("PBR 범위", 0.0, 10.0, (0.0, 10.0))
+        pbr_range = st.slider("PBR 범위", pbr_min, pbr_max, (pbr_min, pbr_max))
         
         # 시가총액 범위 (현재가 기준)
-        price_range = st.slider("주가 범위", 
-                               int(df["현재가"].min()), 
-                               int(df["현재가"].max()), 
-                               (int(df["현재가"].min()), int(df["현재가"].max())))
+        price_range = st.slider("주가 범위", price_min, price_max, (price_min, price_max))
     
     # 데이터 필터링
     filtered_df = df.copy()
@@ -217,12 +250,12 @@ def main():
         mask2 = filtered_df["티커"].str.contains(search_term, case=False, na=False)
         filtered_df = filtered_df[mask1 | mask2]
     
-    # 고급 필터 적용
-    filtered_df = filtered_df[
-        (filtered_df["PER_최근"].between(per_range[0], per_range[1])) &
-        (filtered_df["PBR_최근"].between(pbr_range[0], pbr_range[1])) &
-        (filtered_df["현재가"].between(price_range[0], price_range[1]))
-    ]
+    # 고급 필터 적용 - 안전한 방식
+    per_mask = safe_between_filter(filtered_df["PER_최근"], per_range[0], per_range[1])
+    pbr_mask = safe_between_filter(filtered_df["PBR_최근"], pbr_range[0], pbr_range[1])
+    price_mask = safe_between_filter(filtered_df["현재가"], price_range[0], price_range[1])
+    
+    filtered_df = filtered_df[per_mask & pbr_mask & price_mask]
     
     종목_list = filtered_df["종목명"].tolist()
     
@@ -239,9 +272,12 @@ def main():
     선택한_종목 = st.sidebar.selectbox("📌 종목 선택:", 종목_list, index=default_index)
     종목_df = filtered_df[filtered_df["종목명"] == 선택한_종목].iloc[0]
     
-    # URL 공유 링크 생성
-    share_url = f"?initial={selected_initial}&search={search_term}&company={선택한_종목}"
-    st.sidebar.markdown(f"🔗 [이 분석 공유하기]({share_url})")
+    # URL 공유 링크 생성 - 새로운 방식
+    if st.sidebar.button("🔗 현재 설정 URL에 저장"):
+        st.query_params.initial = selected_initial
+        st.query_params.search = search_term
+        st.query_params.company = 선택한_종목
+        st.sidebar.success("✅ URL에 현재 설정이 저장되었습니다!")
     
     # ----------------------- 메인 컨텐츠 -----------------------
     st.title(f"📊 {선택한_종목} ({종목_df['티커']}) AI 리서치 분석")
@@ -254,30 +290,37 @@ def main():
     col1, col2 = st.columns(2)
     
     with col1:
-        st.metric("현재가", f"{종목_df['현재가']:,}원")
+        st.metric("현재가", f"{종목_df['현재가']:,.0f}원")
         st.metric("ROE (최근)", f"{종목_df['ROE_최근']:.2f}%")
         st.metric("PER (최근)", f"{종목_df['PER_최근']:.2f}")
         st.metric("PBR (최근)", f"{종목_df['PBR_최근']:.2f}")
         st.metric("부채비율", f"{종목_df['부채비율_최근']:.2f}%")
     
     with col2:
-        st.metric("유보율", f"{종목_df['유보율_최근']:.2f}%")
-        st.metric("매출액", f"{종목_df['매출액_최근']:,}원")
-        st.metric("영업이익", f"{종목_df['영업이익_최근']:,}원")
-        st.metric("순이익", f"{종목_df['순이익_최근']:,}원")
+        if '유보율_최근' in 종목_df:
+            st.metric("유보율", f"{종목_df['유보율_최근']:.2f}%")
+        if '매출액_최근' in 종목_df:
+            st.metric("매출액", f"{종목_df['매출액_최근']:,.0f}원")
+        if '영업이익_최근' in 종목_df:
+            st.metric("영업이익", f"{종목_df['영업이익_최근']:,.0f}원")
+        if '순이익_최근' in 종목_df:
+            st.metric("순이익", f"{종목_df['순이익_최근']:,.0f}원")
     
     # 주가 차트
     st.markdown("### 📈 주가 추이")
     price_cols = [col for col in df.columns if col.isdigit() and len(col) == 8]
     if price_cols:
-        price_series = 종목_df[price_cols].astype(float)
-        price_series.index = pd.to_datetime(price_cols, format='%Y%m%d')
-        chart_df = price_series.reset_index().rename(columns={'index': '날짜'})
-        st.line_chart(chart_df.set_index("날짜"))
+        try:
+            price_series = 종목_df[price_cols].astype(float)
+            price_series.index = pd.to_datetime(price_cols, format='%Y%m%d')
+            chart_df = price_series.reset_index().rename(columns={'index': '날짜'})
+            st.line_chart(chart_df.set_index("날짜"))
+        except:
+            st.info("주가 차트 데이터를 표시할 수 없습니다.")
     
     # 뉴스 섹션
     st.markdown("### 📰 최근 뉴스")
-    if isinstance(종목_df["최신뉴스"], str) and 종목_df["최신뉴스"].strip():
+    if "최신뉴스" in 종목_df and isinstance(종목_df["최신뉴스"], str) and 종목_df["최신뉴스"].strip():
         for i, link in enumerate(종목_df["최신뉴스"].splitlines(), 1):
             if link.strip():
                 st.markdown(f"{i}. [뉴스 링크]({link.strip()})")
@@ -334,7 +377,7 @@ def main():
 **기본 정보:**
 - 종목명: {종목_df['종목명']}
 - 티커: {종목_df['티커']}
-- 현재가: {종목_df['현재가']:,}원
+- 현재가: {종목_df['현재가']:,.0f}원
 - PER: {종목_df['PER_최근']:.2f}
 - PBR: {종목_df['PBR_최근']:.2f}
 - ROE: {종목_df['ROE_최근']:.2f}%
@@ -352,9 +395,10 @@ def main():
     with st.expander("📊 검색 통계"):
         st.write(f"**전체 종목 수:** {len(df)}")
         st.write(f"**필터링된 종목 수:** {len(filtered_df)}")
-        st.write(f"**평균 PER:** {filtered_df['PER_최근'].mean():.2f}")
-        st.write(f"**평균 PBR:** {filtered_df['PBR_최근'].mean():.2f}")
-        st.write(f"**평균 ROE:** {filtered_df['ROE_최근'].mean():.2f}%")
+        if len(filtered_df) > 0:
+            st.write(f"**평균 PER:** {filtered_df['PER_최근'].mean():.2f}")
+            st.write(f"**평균 PBR:** {filtered_df['PBR_최근'].mean():.2f}")
+            st.write(f"**평균 ROE:** {filtered_df['ROE_최근'].mean():.2f}%")
 
 if __name__ == "__main__":
     main()
