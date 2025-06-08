@@ -24,7 +24,8 @@ import gdown
 import zipfile
 import tarfile
 import torch.quantization
-from transformers import AutoTokenizer, AutoModelForCausalLM
+import transformers
+from transformers.models.auto import AutoTokenizer, AutoModelForCausalLM
 import numpy as np
 import gc
 
