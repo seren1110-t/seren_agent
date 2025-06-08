@@ -37,12 +37,125 @@ def cleanup_memory():
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
+def verify_zip_file(file_path):
+    """ZIP 파일 검증"""
+    try:
+        if not os.path.exists(file_path):
+            return False, "파일이 존재하지 않습니다."
+        
+        file_size = os.path.getsize(file_path)
+        if file_size < 1000:  # 1KB 미만
+            return False, f"파일이 너무 작습니다 ({file_size} bytes). 오류 페이지일 가능성이 높습니다."
+        
+        # ZIP 파일 검증
+        with zipfile.ZipFile(file_path, 'r') as zip_ref:
+            file_list = zip_ref.namelist()
+            if len(file_list) == 0:
+                return False, "빈 ZIP 파일입니다."
+            
+            # 필요한 파일들이 있는지 확인
+            required_files = ['base_model/', 'cpu_deployment_config.json']
+            found_files = []
+            for required in required_files:
+                for file in file_list:
+                    if required in file:
+                        found_files.append(required)
+                        break
+            
+            if len(found_files) < len(required_files):
+                return False, f"필요한 파일이 없습니다. 찾은 파일: {found_files}"
+        
+        return True, f"유효한 ZIP 파일입니다. 포함된 파일: {len(file_list)}개"
+        
+    except zipfile.BadZipFile:
+        # 파일 내용 확인 (HTML 페이지인지 체크)
+        try:
+            with open(file_path, 'rb') as f:
+                first_bytes = f.read(200)
+                if b'<html' in first_bytes.lower() or b'<!doctype' in first_bytes.lower():
+                    return False, "HTML 페이지가 다운로드되었습니다. Google Drive 할당량 초과 가능성이 높습니다."
+                else:
+                    return False, f"유효하지 않은 ZIP 파일입니다. 첫 200바이트: {first_bytes[:100]}..."
+        except Exception as e:
+            return False, f"파일 읽기 오류: {e}"
+    except Exception as e:
+        return False, f"ZIP 검증 오류: {e}"
+
+def download_with_verification(file_id, output_path, max_retries=3):
+    """검증을 포함한 다운로드"""
+    download_methods = [
+        f"https://drive.google.com/uc?id={file_id}&confirm=t",
+        f"https://drive.google.com/uc?id={file_id}",
+        f"https://drive.google.com/uc?export=download&id={file_id}",
+    ]
+    
+    for attempt in range(max_retries):
+        st.info(f"다운로드 시도 {attempt + 1}/{max_retries}")
+        
+        # 기존 파일 삭제
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        
+        for i, url in enumerate(download_methods):
+            try:
+                st.info(f"방법 {i+1}: {url[:50]}...")
+                gdown.download(url, output_path, quiet=False)
+                
+                # 파일 검증
+                is_valid, message = verify_zip_file(output_path)
+                st.info(f"검증 결과: {message}")
+                
+                if is_valid:
+                    st.success("✅ 유효한 파일 다운로드 완료!")
+                    return True
+                else:
+                    st.warning(f"❌ 검증 실패: {message}")
+                    continue
+                    
+            except Exception as e:
+                st.warning(f"다운로드 방법 {i+1} 실패: {e}")
+                continue
+        
+        st.warning(f"시도 {attempt + 1} 실패. 잠시 후 재시도...")
+        
+    return False
+
+def manual_download_guide(file_id, output_path):
+    """수동 다운로드 안내"""
+    st.error("🚫 자동 다운로드가 실패했습니다.")
+    
+    with st.expander("📋 수동 다운로드 방법", expanded=True):
+        st.markdown(f"""
+        **Google Drive 할당량 우회 수동 다운로드:**
+        
+        1. **브라우저에서 다운로드:**
+           - [파일 링크](https://drive.google.com/file/d/{file_id}/view) 클릭
+           - "내 드라이브에 추가" 버튼 클릭
+           - 새 폴더 생성 후 바로가기 추가
+           - 폴더 전체를 다운로드 (ZIP으로 압축됨)
+           
+        2. **파일 저장 위치:**
+           - 다운로드한 ZIP 파일을 `{output_path}` 경로에 저장
+           
+        3. **파일 검증:**
+           - ZIP 파일이 정상적으로 열리는지 확인
+           - 파일 크기가 10MB 이상인지 확인
+        """)
+    
+    # 파일 확인 버튼
+    if st.button("✅ 수동 다운로드 완료", type="primary"):
+        is_valid, message = verify_zip_file(output_path)
+        if is_valid:
+            st.success("파일 검증 완료! 페이지를 새로고침하여 계속하세요.")
+            st.rerun()
+        else:
+            st.error(f"파일 검증 실패: {message}")
+
 @st.cache_resource
 def download_and_load_models():
-    """Google Drive에서 모델 다운로드 및 CPU 최적화 모델 로드 (첫 번째 코드 저장 방식 기반)"""
+    """Google Drive에서 모델 다운로드 및 CPU 최적화 모델 로드"""
     
-    # Google Drive 파일 ID (첫 번째 코드에서 저장된 모델)
-    saved_model_id = "1kQs4co-fO5JOTaAQ6Hn8S0s4fwUh6qyo"  # 실제 Google Drive ID로 변경 필요
+    saved_model_id = "1kQs4co-fO5JOTaAQ6Hn8S0s4fwUh6qyo"
     
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -50,25 +163,34 @@ def download_and_load_models():
     try:
         cleanup_memory()
         
-        # 저장된 모델 다운로드
-        status_text.text("🔄 저장된 CPU 호환 모델 다운로드 중... (1/6)")
-        progress_bar.progress(15)
-        
         model_dir = "./koalpaca_streamlit_model"
+        zip_path = "./koalpaca_streamlit_model.zip"
         
         if not os.path.exists(model_dir):
-            saved_model_url = f"https://drive.google.com/open?id={saved_model_id}"
+            status_text.text("🔄 모델 다운로드 및 검증 중... (1/6)")
+            progress_bar.progress(15)
             
-            # .zip 형식으로 다운로드
-            gdown.download(saved_model_url, "./koalpaca_streamlit_model.zip", quiet=False)
-            
-            # ZIP 파일 압축 해제
-            with zipfile.ZipFile("./koalpaca_streamlit_model.zip", 'r') as zip_ref:
-                zip_ref.extractall("./")
+            # 검증을 포함한 다운로드
+            if download_with_verification(saved_model_id, zip_path):
+                # ZIP 파일 압축 해제
+                status_text.text("📦 압축 해제 중...")
+                progress_bar.progress(25)
+                
+                try:
+                    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                        zip_ref.extractall("./")
+                    st.success("✅ 압축 해제 완료!")
+                except Exception as e:
+                    st.error(f"압축 해제 실패: {e}")
+                    return None, None
+            else:
+                # 수동 다운로드 안내
+                manual_download_guide(saved_model_id, zip_path)
+                st.stop()
         
         # 설정 정보 로드
         status_text.text("🔧 모델 설정 정보 확인 중... (2/6)")
-        progress_bar.progress(30)
+        progress_bar.progress(35)
         
         config_path = os.path.join(model_dir, "cpu_deployment_config.json")
         if os.path.exists(config_path):
@@ -82,67 +204,66 @@ def download_and_load_models():
         
         # 토크나이저 로드
         status_text.text("📝 토크나이저 로드 중... (3/6)")
-        progress_bar.progress(45)
+        progress_bar.progress(50)
         
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_dir,
-            trust_remote_code=True,
-            use_fast=False,  # CPU 환경에서 안정성 우선
-            padding_side="right"
-        )
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-            tokenizer.pad_token_id = tokenizer.eos_token_id
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_dir,
+                trust_remote_code=True,
+                use_fast=False,
+                padding_side="right"
+            )
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+                tokenizer.pad_token_id = tokenizer.eos_token_id
+        except Exception as e:
+            st.error(f"토크나이저 로드 실패: {e}")
+            return None, None
         
-        # 베이스 모델 로드 (첫 번째 코드에서 저장된 방식)
-        status_text.text("🧠 베이스 모델 로드 중 (CPU 최적화)... (4/6)")
-        progress_bar.progress(60)
+        # 베이스 모델 로드
+        status_text.text("🧠 베이스 모델 로드 중... (4/6)")
+        progress_bar.progress(65)
         
         base_model_path = os.path.join(model_dir, "base_model")
         
         if os.path.exists(base_model_path):
-            # 베이스 모델 로드
-            model = AutoModelForCausalLM.from_pretrained(
-                base_model_path,
-                torch_dtype=torch.float32,  # CPU에서는 float32 사용
-                device_map="cpu",
-                low_cpu_mem_usage=True,
-                trust_remote_code=True,
-                use_cache=False,  # 메모리 절약
-                torch_compile=False  # CPU에서는 컴파일 비활성화
-            )
+            try:
+                model = AutoModelForCausalLM.from_pretrained(
+                    base_model_path,
+                    torch_dtype=torch.float32,
+                    device_map="cpu",
+                    low_cpu_mem_usage=True,
+                    trust_remote_code=True,
+                    use_cache=False,
+                    torch_compile=False
+                )
+            except Exception as e:
+                st.error(f"베이스 모델 로드 실패: {e}")
+                return None, None
         else:
             st.error(f"❌ 베이스 모델 디렉토리를 찾을 수 없습니다: {base_model_path}")
             return None, None
         
         cleanup_memory()
-        
-        # 모델을 평가 모드로 설정
         model.eval()
         
-        # 저장된 양자화 모델이 있는지 확인
-        status_text.text("⚡ 양자화 모델 확인 중... (5/6)")
-        progress_bar.progress(75)
+        # 양자화 적용
+        status_text.text("⚡ 양자화 적용 중... (5/6)")
+        progress_bar.progress(80)
         
         quantized_model_path = os.path.join(model_dir, "cpu_quantized_model.pt")
         
         if os.path.exists(quantized_model_path):
             try:
-                # 저장된 양자화 모델 로드
                 checkpoint = torch.load(quantized_model_path, map_location='cpu')
-                
                 if 'quantization_info' in checkpoint:
                     quant_info = checkpoint['quantization_info']
                     st.success(f"✅ 저장된 양자화 모델 발견: {quant_info['method']}")
-                    
-                    # 양자화된 state_dict가 있으면 사용
                     if 'model_state_dict' in checkpoint:
                         model.load_state_dict(checkpoint['model_state_dict'], strict=False)
                         st.info("📦 저장된 양자화 가중치 적용 완료")
-                
             except Exception as e:
-                st.warning(f"저장된 양자화 모델 로드 실패, 동적 양자화 적용: {e}")
-                
+                st.warning(f"저장된 양자화 모델 로드 실패: {e}")
                 # 동적 양자화 적용
                 try:
                     with torch.no_grad():
@@ -157,7 +278,7 @@ def download_and_load_models():
                 except Exception as qe:
                     st.warning(f"동적 양자화 실패, 원본 모델 사용: {qe}")
         else:
-            # 양자화 모델이 없으면 동적 양자화 적용
+            # 동적 양자화 적용
             try:
                 with torch.no_grad():
                     quantized_model = torch.quantization.quantize_dynamic(
@@ -173,7 +294,7 @@ def download_and_load_models():
         
         # 모델 정보 표시
         status_text.text("📊 모델 정보 수집 중... (6/6)")
-        progress_bar.progress(90)
+        progress_bar.progress(95)
         
         def get_model_size_safe(model):
             try:
@@ -199,9 +320,8 @@ def download_and_load_models():
         
         # 임시 파일 정리
         try:
-            temp_file = "./koalpaca_streamlit_model.zip"
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
         except:
             pass
         
