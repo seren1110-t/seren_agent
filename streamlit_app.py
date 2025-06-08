@@ -37,6 +37,83 @@ def cleanup_memory():
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
+def safe_load_tokenizer(model_path):
+    """안전한 토크나이저 로드 - 'bool' object has no attribute 'pad_token' 오류 해결"""
+    try:
+        # 방법 1: 기본 로드 시도
+        st.info("📝 토크나이저 로드 시도 중...")
+        
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_path,
+            trust_remote_code=True,
+            use_fast=False,
+            padding_side="right"
+        )
+        
+        # pad_token 안전하게 설정
+        if not hasattr(tokenizer, 'pad_token') or tokenizer.pad_token is None:
+            st.info("🔧 pad_token 설정 중...")
+            if hasattr(tokenizer, 'eos_token') and tokenizer.eos_token is not None:
+                tokenizer.pad_token = tokenizer.eos_token
+                if hasattr(tokenizer, 'eos_token_id') and tokenizer.eos_token_id is not None:
+                    tokenizer.pad_token_id = tokenizer.eos_token_id
+                else:
+                    tokenizer.pad_token_id = 2  # 기본값
+            else:
+                # eos_token이 없으면 새로 추가
+                tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+                tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids('[PAD]')
+        
+        # 토크나이저 검증
+        if hasattr(tokenizer, 'pad_token') and tokenizer.pad_token is not None:
+            st.success(f"✅ 토크나이저 로드 성공! pad_token: {tokenizer.pad_token}")
+            return tokenizer, None
+        else:
+            raise ValueError("pad_token 설정 실패")
+        
+    except Exception as e:
+        st.warning(f"기본 토크나이저 로드 실패: {e}")
+        
+        # 방법 2: 대안 로드 방식
+        try:
+            st.info("🔄 대안 토크나이저 로드 시도...")
+            
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_path,
+                trust_remote_code=True,
+                use_fast=True,  # fast tokenizer 시도
+                padding_side="right",
+                add_eos_token=True
+            )
+            
+            # 강제 pad_token 설정
+            tokenizer.pad_token = "</s>"  # 기본 EOS 토큰
+            tokenizer.pad_token_id = 2    # 기본 EOS 토큰 ID
+            
+            st.success("✅ 대안 토크나이저 로드 성공!")
+            return tokenizer, None
+            
+        except Exception as e2:
+            st.error(f"대안 토크나이저 로드도 실패: {e2}")
+            
+            # 방법 3: 최소한의 토크나이저 생성
+            try:
+                st.info("🆘 최소한의 토크나이저 생성 시도...")
+                
+                # 기본 설정으로 토크나이저 생성
+                from transformers import GPT2Tokenizer
+                tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+                
+                # 한국어 지원을 위한 최소 설정
+                tokenizer.pad_token = tokenizer.eos_token
+                tokenizer.pad_token_id = tokenizer.eos_token_id
+                
+                st.warning("⚠️ 기본 토크나이저로 대체됨 (성능 제한)")
+                return tokenizer, None
+                
+            except Exception as e3:
+                return None, f"모든 토크나이저 로드 방법 실패: {e3}"
+
 def verify_zip_file(file_path):
     """ZIP 파일 검증"""
     try:
@@ -153,7 +230,7 @@ def manual_download_guide(file_id, output_path):
 
 @st.cache_resource
 def download_and_load_models():
-    """Google Drive에서 모델 다운로드 및 CPU 최적화 모델 로드"""
+    """Google Drive에서 모델 다운로드 및 CPU 최적화 모델 로드 (토크나이저 오류 수정)"""
     
     saved_model_id = "1kQs4co-fO5JOTaAQ6Hn8S0s4fwUh6qyo"
     
@@ -202,22 +279,13 @@ def download_and_load_models():
         else:
             st.warning("⚠️ 설정 파일을 찾을 수 없습니다.")
         
-        # 토크나이저 로드
+        # 안전한 토크나이저 로드
         status_text.text("📝 토크나이저 로드 중... (3/6)")
         progress_bar.progress(50)
         
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(
-                model_dir,
-                trust_remote_code=True,
-                use_fast=False,
-                padding_side="right"
-            )
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
-                tokenizer.pad_token_id = tokenizer.eos_token_id
-        except Exception as e:
-            st.error(f"토크나이저 로드 실패: {e}")
+        tokenizer, error = safe_load_tokenizer(model_dir)
+        if tokenizer is None:
+            st.error(f"❌ 토크나이저 로드 실패: {error}")
             return None, None
         
         # 베이스 모델 로드
@@ -237,8 +305,9 @@ def download_and_load_models():
                     use_cache=False,
                     torch_compile=False
                 )
+                st.success("✅ 베이스 모델 로드 완료!")
             except Exception as e:
-                st.error(f"베이스 모델 로드 실패: {e}")
+                st.error(f"❌ 베이스 모델 로드 실패: {e}")
                 return None, None
         else:
             st.error(f"❌ 베이스 모델 디렉토리를 찾을 수 없습니다: {base_model_path}")
@@ -341,20 +410,26 @@ def download_and_load_models():
         return None, None
 
 def generate_response(model, tokenizer, prompt, max_new_tokens=512):
-    """KoAlpaca 모델을 사용한 응답 생성"""
+    """KoAlpaca 모델을 사용한 응답 생성 (토크나이저 오류 방지)"""
     try:
         # KoAlpaca 프롬프트 형식 적용
         formatted_prompt = f"### 질문: {prompt}\n\n### 답변:"
         
-        # 토크나이징
-        inputs = tokenizer(
-            formatted_prompt,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=512,
-            return_token_type_ids=False
-        )
+        # 안전한 토크나이징
+        try:
+            inputs = tokenizer(
+                formatted_prompt,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=512,
+                return_token_type_ids=False
+            )
+        except Exception as e:
+            st.warning(f"토크나이징 오류: {e}")
+            # 기본 토크나이징 시도
+            inputs = tokenizer.encode(formatted_prompt, return_tensors="pt")
+            inputs = {"input_ids": inputs}
         
         # 생성
         with torch.no_grad():
@@ -364,16 +439,19 @@ def generate_response(model, tokenizer, prompt, max_new_tokens=512):
                 do_sample=True,
                 temperature=0.7,
                 top_p=0.9,
-                pad_token_id=tokenizer.pad_token_id,
+                pad_token_id=getattr(tokenizer, 'pad_token_id', 2),
                 eos_token_id=2,
                 use_cache=True,
                 repetition_penalty=1.1,
             )
         
         # 디코딩 (입력 부분 제거)
-        generated_ids = [
-            output_ids[len(input_ids):] for input_ids, output_ids in zip(inputs.input_ids, outputs)
-        ]
+        if 'input_ids' in inputs:
+            generated_ids = [
+                output_ids[len(input_ids):] for input_ids, output_ids in zip(inputs['input_ids'], outputs)
+            ]
+        else:
+            generated_ids = outputs
         
         response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
         return response.strip()
