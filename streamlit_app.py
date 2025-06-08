@@ -56,7 +56,7 @@ def download_and_load_models():
         model_dir = "./koalpaca_streamlit_model"
         
         if not os.path.exists(model_dir):
-            saved_model_url = f"https://drive.google.com/uc?id={saved_model_id}"
+            saved_model_url = f"https://drive.google.com/open?id={saved_model_id}"
             
             # .zip 형식으로 다운로드
             gdown.download(saved_model_url, "./koalpaca_streamlit_model.zip", quiet=False)
