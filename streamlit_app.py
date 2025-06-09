@@ -37,29 +37,45 @@ def load_llama_model():
     try:
         model_name = "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
         
+        st.info("모델 다운로드 중... (첫 실행 시 시간이 걸립니다)")
+        
         # 토크나이저 먼저 로드
         tokenizer = AutoTokenizer.from_pretrained(
             model_name,
             trust_remote_code=True
         )
         
-        # 모델 로드 (메모리 효율적 설정)
+        st.info("모델 로딩 중...")
+        
+        # 모델 로드 (accelerate 없이 CPU 전용 설정)
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch.float32,
-            device_map="cpu",
-            low_cpu_mem_usage=True,
             trust_remote_code=True
         )
+        
+        # CPU로 명시적 이동
+        model = model.to("cpu")
+        model.eval()  # 평가 모드로 설정
         
         # 토크나이저 설정
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
         tokenizer.padding_side = "left"  # 생성에는 left padding이 더 적합
+        
+        # 메모리 정리
+        gc.collect()
             
         return model, tokenizer, "✅ TinyLlama 로드 성공!"
+        
     except Exception as e:
-        return None, None, f"❌ 모델 로드 실패: {str(e)}"
+        error_msg = str(e)
+        if "accelerate" in error_msg.lower():
+            return None, None, f"❌ accelerate 라이브러리가 필요합니다: pip install accelerate"
+        elif "connection" in error_msg.lower() or "timeout" in error_msg.lower():
+            return None, None, f"❌ 네트워크 연결 오류: {error_msg}"
+        else:
+            return None, None, f"❌ 모델 로드 실패: {error_msg}"
 
 def generate_text(model, tokenizer, prompt, max_new_tokens=200, temperature=0.7):
     """텍스트 생성 함수"""
@@ -67,7 +83,7 @@ def generate_text(model, tokenizer, prompt, max_new_tokens=200, temperature=0.7)
         # 프롬프트 길이 제한 (안전한 길이로)
         max_input_length = 512  # 입력 길이 제한
         
-        # 토큰화 (패딩 없이)
+        # 토큰화 (패딩 없이, CPU 텐서로)
         inputs = tokenizer(
             prompt,
             return_tensors="pt",
@@ -75,6 +91,9 @@ def generate_text(model, tokenizer, prompt, max_new_tokens=200, temperature=0.7)
             max_length=max_input_length,
             padding=False  # 패딩 제거
         )
+        
+        # CPU로 명시적 이동
+        inputs = {k: v.to("cpu") for k, v in inputs.items()}
         
         input_length = inputs['input_ids'].shape[1]
         
@@ -134,7 +153,17 @@ if model is not None and tokenizer is not None:
     - 프롬프트는 간결하게 작성하세요
     - 긴 텍스트는 자동으로 잘립니다
     - CPU 전용이므로 생성에 시간이 걸립니다
+    - accelerate 라이브러리 없이 작동합니다
     """)
+    
+    # accelerate 설치 안내
+    st.sidebar.subheader("라이브러리 설치")
+    with st.sidebar.expander("필요한 라이브러리"):
+        st.code("""
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+pip install transformers
+pip install streamlit
+        """, language="bash")
     
     # 텍스트 생성 인터페이스
     st.subheader("텍스트 생성")
