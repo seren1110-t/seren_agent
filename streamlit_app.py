@@ -1,8 +1,9 @@
 import os
 import sys
 
-# 환경 변수 설정 (토크나이저 경고 방지)
+# 환경 변수 설정 (CUDA/토크나이저 경고 방지)
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
 # PyTorch 클래스 경로 충돌 해결 (최상단에 위치)
 try:
@@ -18,88 +19,112 @@ import streamlit as st
 
 # transformers 라이브러리 import 및 상태 체크
 try:
-    from transformers import AutoTokenizer, AutoModelForCausalLM
+    from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
     import torch
     TRANSFORMERS_AVAILABLE = True
 except ImportError as e:
     TRANSFORMERS_AVAILABLE = False
     st.error(f"Transformers 라이브러리를 불러올 수 없습니다: {e}")
 
-st.title("🤖 작은 LLM 모델 로드 확인")
+st.title("🦙 TinyLlama 1.1B 데모")
 
 if not TRANSFORMERS_AVAILABLE:
     st.stop()
 
 @st.cache_resource
-def load_simple_model():
-    """가장 작은 GPT 모델 로드"""
+def load_llama_model():
+    """TinyLlama 1.1B 모델 로드"""
     try:
-        model_name = "sshleifer/tiny-gpt2"  # 매우 작은 테스트용 모델
-
+        model_name = "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
+        
+        # 양자화 설정 (VRAM 절약)
+        quant_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16
+        )
+        
         tokenizer = AutoTokenizer.from_pretrained(model_name)
-        model = AutoModelForCausalLM.from_pretrained(model_name)
-
-        # 패딩 토큰 설정
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-
-        return model, tokenizer, "✅ 모델 로드 성공!"
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            device_map="auto",
+            quantization_config=quant_config,
+            trust_remote_code=True
+        )
+        
+        # 토크나이저 설정
+        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "right"
+            
+        return model, tokenizer, "✅ TinyLlama 로드 성공!"
     except Exception as e:
         return None, None, f"❌ 모델 로드 실패: {str(e)}"
 
 # 모델 로드
-with st.spinner("모델 로딩 중..."):
-    model, tokenizer, status = load_simple_model()
+with st.spinner("TinyLlama 모델 로딩 중..."):
+    model, tokenizer, status = load_llama_model()
 
 st.write(status)
 
 if model is not None and tokenizer is not None:
-    st.success("모델이 정상적으로 로드되었습니다!")
-
-    # 간단한 텍스트 생성 테스트
-    st.subheader("텍스트 생성 테스트")
-
-    prompt = st.text_input("프롬프트 입력:", "Hello")
-
-    if st.button("생성"):
+    st.success("TinyLlama 1.1B 준비 완료!")
+    
+    # 텍스트 생성 파라미터 설정
+    st.sidebar.subheader("생성 설정")
+    max_new_tokens = st.sidebar.slider("최대 토큰 수", 50, 500, 200)
+    temperature = st.sidebar.slider("Temperature", 0.1, 1.0, 0.7)
+    
+    # 텍스트 생성 인터페이스
+    st.subheader("챗 인터페이스")
+    
+    prompt = st.text_area("프롬프트 입력:", "The future of AI is", height=100)
+    
+    if st.button("생성 시작"):
         if prompt:
-            with st.spinner("생성 중..."):
+            with st.spinner("텍스트 생성 중..."):
                 try:
                     # 토큰화
-                    inputs = tokenizer.encode(prompt, return_tensors="pt")
-
+                    inputs = tokenizer(
+                        prompt, 
+                        return_tensors="pt", 
+                        padding=True, 
+                        truncation=True
+                    ).to(model.device)
+                    
                     # 생성
                     with torch.no_grad():
                         outputs = model.generate(
-                            inputs,
-                            max_length=inputs.shape[1] + 20,
-                            num_return_sequences=1,
-                            temperature=0.7,
+                            **inputs,
+                            max_new_tokens=max_new_tokens,
+                            temperature=temperature,
                             do_sample=True,
-                            pad_token_id=tokenizer.eos_token_id
+                            pad_token_id=tokenizer.eos_token_id,
+                            repetition_penalty=1.1
                         )
-
+                    
                     # 디코딩
-                    result = tokenizer.decode(outputs[0], skip_special_tokens=True)
-
+                    result = tokenizer.decode(
+                        outputs[0], 
+                        skip_special_tokens=True
+                    )
+                    
                     st.write("**생성 결과:**")
-                    st.write(result)
-
+                    st.markdown(f"``````")
+                    
                 except Exception as e:
-                    st.error(f"생성 중 오류: {e}")
+                    st.error(f"생성 오류: {e}")
         else:
             st.warning("프롬프트를 입력해주세요.")
 else:
-    st.error("모델을 로드할 수 없습니다.")
+    st.error("모델 초기화 실패")
 
 # 시스템 정보
-st.sidebar.write("**시스템 정보:**")
+st.sidebar.subheader("시스템 상태")
 st.sidebar.write(f"Python: {sys.version.split()[0]}")
 
 if TRANSFORMERS_AVAILABLE:
     st.sidebar.write(f"PyTorch: {torch.__version__}")
     st.sidebar.write(f"CUDA 사용 가능: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
-        st.sidebar.write(f"CUDA 장치: {torch.cuda.get_device_name(0)}")
-else:
-    st.sidebar.write("PyTorch: 불러오기 실패")
+        st.sidebar.progress(torch.cuda.memory_allocated()/torch.cuda.max_memory_allocated(), 
+                          text=f"VRAM 사용량: {torch.cuda.memory_allocated()//1024**2}MB / {torch.cuda.max_memory_allocated()//1024**2}MB")
