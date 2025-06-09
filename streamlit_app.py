@@ -1,10 +1,22 @@
-import streamlit as st
-import sys
 import os
+import sys
 
-# torch import 문제 해결을 위한 환경 설정
+# 환경 변수 설정 (토크나이저 경고 방지)
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
+# PyTorch 클래스 경로 충돌 해결 (최상단에 위치)
+try:
+    import torch
+    import importlib.util
+    torch_classes_path = os.path.join(os.path.dirname(importlib.util.find_spec("torch").origin), "classes")
+    if hasattr(torch, "classes"):
+        torch.classes.__path__ = [torch_classes_path]
+except Exception as e:
+    pass  # torch 미설치 시 무시
+
+import streamlit as st
+
+# transformers 라이브러리 import 및 상태 체크
 try:
     from transformers import AutoTokenizer, AutoModelForCausalLM
     import torch
@@ -23,14 +35,14 @@ def load_simple_model():
     """가장 작은 GPT 모델 로드"""
     try:
         model_name = "sshleifer/tiny-gpt2"  # 매우 작은 테스트용 모델
-        
+
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModelForCausalLM.from_pretrained(model_name)
-        
+
         # 패딩 토큰 설정
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
-            
+
         return model, tokenizer, "✅ 모델 로드 성공!"
     except Exception as e:
         return None, None, f"❌ 모델 로드 실패: {str(e)}"
@@ -43,36 +55,36 @@ st.write(status)
 
 if model is not None and tokenizer is not None:
     st.success("모델이 정상적으로 로드되었습니다!")
-    
+
     # 간단한 텍스트 생성 테스트
     st.subheader("텍스트 생성 테스트")
-    
+
     prompt = st.text_input("프롬프트 입력:", "Hello")
-    
+
     if st.button("생성"):
         if prompt:
             with st.spinner("생성 중..."):
                 try:
                     # 토큰화
                     inputs = tokenizer.encode(prompt, return_tensors="pt")
-                    
+
                     # 생성
                     with torch.no_grad():
                         outputs = model.generate(
-                            inputs, 
+                            inputs,
                             max_length=inputs.shape[1] + 20,
                             num_return_sequences=1,
                             temperature=0.7,
                             do_sample=True,
                             pad_token_id=tokenizer.eos_token_id
                         )
-                    
+
                     # 디코딩
                     result = tokenizer.decode(outputs[0], skip_special_tokens=True)
-                    
+
                     st.write("**생성 결과:**")
                     st.write(result)
-                    
+
                 except Exception as e:
                     st.error(f"생성 중 오류: {e}")
         else:
@@ -87,5 +99,7 @@ st.sidebar.write(f"Python: {sys.version.split()[0]}")
 if TRANSFORMERS_AVAILABLE:
     st.sidebar.write(f"PyTorch: {torch.__version__}")
     st.sidebar.write(f"CUDA 사용 가능: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        st.sidebar.write(f"CUDA 장치: {torch.cuda.get_device_name(0)}")
 else:
     st.sidebar.write("PyTorch: 불러오기 실패")
