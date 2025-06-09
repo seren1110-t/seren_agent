@@ -75,11 +75,13 @@ if model is not None and tokenizer is not None:
             with st.spinner("텍스트 생성 중..."):
                 try:
                     # 토큰화
+                    max_length = getattr(model.config, "max_position_embeddings", 2048)
                     inputs = tokenizer(
-                        prompt, 
-                        return_tensors="pt", 
-                        padding=True, 
-                        truncation=True
+                        prompt,
+                        return_tensors="pt",
+                        truncation=True,
+                        padding="max_length",
+                        max_length=max_length
                     )
                     
                     # 생성
