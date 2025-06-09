@@ -1,9 +1,8 @@
 import os
 import sys
 
-# 환경 변수 설정 (CUDA/토크나이저 경고 방지)
+# 환경 변수 설정 (토크나이저 경고 방지)
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
 # PyTorch 클래스 경로 충돌 해결 (최상단에 위치)
 try:
@@ -19,38 +18,30 @@ import streamlit as st
 
 # transformers 라이브러리 import 및 상태 체크
 try:
-    from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+    from transformers import AutoTokenizer, AutoModelForCausalLM
     import torch
     TRANSFORMERS_AVAILABLE = True
 except ImportError as e:
     TRANSFORMERS_AVAILABLE = False
     st.error(f"Transformers 라이브러리를 불러올 수 없습니다: {e}")
 
-st.title("🦙 TinyLlama 1.1B 데모")
+st.title("🦙 TinyLlama 1.1B (CPU 전용) 데모")
 
 if not TRANSFORMERS_AVAILABLE:
     st.stop()
 
 @st.cache_resource
 def load_llama_model():
-    """TinyLlama 1.1B 모델 로드"""
+    """TinyLlama 1.1B 모델 로드 (CPU Only)"""
     try:
         model_name = "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
-        
-        # 양자화 설정 (VRAM 절약)
-        quant_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16
-        )
         
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            device_map="auto",
-            quantization_config=quant_config,
-            trust_remote_code=True
+            torch_dtype=torch.float32
         )
+        model.to("cpu")
         
         # 토크나이저 설정
         tokenizer.pad_token = tokenizer.eos_token
@@ -89,7 +80,7 @@ if model is not None and tokenizer is not None:
                         return_tensors="pt", 
                         padding=True, 
                         truncation=True
-                    ).to(model.device)
+                    )
                     
                     # 생성
                     with torch.no_grad():
@@ -109,10 +100,10 @@ if model is not None and tokenizer is not None:
                     )
                     
                     st.write("**생성 결과:**")
-                    st.markdown(f"``````")
+                    st.markdown(result)
                     
                 except Exception as e:
-                    st.error(f"생성 오류: {e}")
+                    st.error(f"생성 오류: {str(e)}")
         else:
             st.warning("프롬프트를 입력해주세요.")
 else:
@@ -126,5 +117,4 @@ if TRANSFORMERS_AVAILABLE:
     st.sidebar.write(f"PyTorch: {torch.__version__}")
     st.sidebar.write(f"CUDA 사용 가능: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
-        st.sidebar.progress(torch.cuda.memory_allocated()/torch.cuda.max_memory_allocated(), 
-                          text=f"VRAM 사용량: {torch.cuda.memory_allocated()//1024**2}MB / {torch.cuda.max_memory_allocated()//1024**2}MB")
+        st.sidebar.write(f"GPU: {torch.cuda.get_device_name(0)}")
