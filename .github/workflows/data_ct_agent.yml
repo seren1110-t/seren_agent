@@ -1,71 +1,71 @@
-name: Data Collection Agent
+# name: Data Collection Agent
 
-on:
-  schedule:
-    - cron: '0 0 * * *'  # 매일 오전 9시 (UTC)
-  workflow_dispatch:  # 수동 실행
+# on:
+#   schedule:
+#     - cron: '0 0 * * *'  # 매일 오전 9시 (UTC)
+#   workflow_dispatch:  # 수동 실행
 
   
-#  push:
-#    branches: [ main ]
-#    paths:
-#      - 'data_ct_agent.py'
-#      - 'news_collector.py' 
-#      - 'financial_collector.py'
+# #  push:
+# #    branches: [ main ]
+# #    paths:
+# #      - 'data_ct_agent.py'
+# #      - 'news_collector.py' 
+# #      - 'financial_collector.py'
 
-permissions:
-  contents: write
+# permissions:
+#   contents: write
 
-jobs:
-  collect-data:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+# jobs:
+#   collect-data:
+#     runs-on: ubuntu-latest
+#     timeout-minutes: 30
 
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+#     steps:
+#     - name: Checkout repository
+#       uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-        cache: 'pip'
+#     - name: Set up Python
+#       uses: actions/setup-python@v4
+#       with:
+#         python-version: '3.11'
+#         cache: 'pip'
 
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y wget unzip
-        wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
-        sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list'
-        sudo apt-get update
-        sudo apt-get install -y google-chrome-stable
+#     - name: Install system dependencies
+#       run: |
+#         sudo apt-get update
+#         sudo apt-get install -y wget unzip
+#         wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+#         sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list'
+#         sudo apt-get update
+#         sudo apt-get install -y google-chrome-stable
 
-    - name: Install Python dependencies
-      run: |
-        pip install --upgrade pip
-        pip install -r requirements.txt
+#     - name: Install Python dependencies
+#       run: |
+#         pip install --upgrade pip
+#         pip install -r requirements.txt
 
-    - name: Set environment variables
-      run: |
-        echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> $GITHUB_ENV
-        echo "PYTHONPATH=$GITHUB_WORKSPACE" >> $GITHUB_ENV
+#     - name: Set environment variables
+#       run: |
+#         echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> $GITHUB_ENV
+#         echo "PYTHONPATH=$GITHUB_WORKSPACE" >> $GITHUB_ENV
 
 
-    - name: Run data collection agent
-      run: |
-        python data_ct_agent.py
-      env:
-        DISPLAY: :99
+#     - name: Run data collection agent
+#       run: |
+#         python data_ct_agent.py
+#       env:
+#         DISPLAY: :99
 
-    - name: Commit and push collected data
-      env:
-        REPO_URL: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
-      run: |
-        git config user.name "github-actions"
-        git config user.email "github-actions@github.com"
+#     - name: Commit and push collected data
+#       env:
+#         REPO_URL: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+#       run: |
+#         git config user.name "github-actions"
+#         git config user.email "github-actions@github.com"
 
-        git add financial_data.db bk_faiss_index/ bk_docs.pkl
-        git commit -m "Auto-update collected data from GitHub Actions on $(date +'%Y-%m-%d %H:%M')" || echo "No changes to commit"
+#         git add financial_data.db bk_faiss_index/ bk_docs.pkl
+#         git commit -m "Auto-update collected data from GitHub Actions on $(date +'%Y-%m-%d %H:%M')" || echo "No changes to commit"
 
-        git pull --rebase "$REPO_URL" main
-        git push "$REPO_URL" main
+#         git pull --rebase "$REPO_URL" main
+#         git push "$REPO_URL" main
